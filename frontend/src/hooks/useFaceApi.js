@@ -70,7 +70,7 @@ export const useFaceApi = () => {
   }, []);
 
   // Detect and recognize faces in a video element
-  const detectAndRecognize = useCallback(async (videoElement, canvasElement = null) => {
+  const detectAndRecognize = useCallback(async (videoElement, canvasElement = null, minConfidence = 90) => {
     if (!modelsLoaded || !videoElement) return [];
 
     try {
@@ -97,7 +97,23 @@ export const useFaceApi = () => {
           bestMatch = faceMatcher.findBestMatch(det.descriptor);
           label = bestMatch.label;
           distance = bestMatch.distance;
-          confidence = Math.round((1 - distance) * 100);
+          
+          // Realistic confidence rating mapping:
+          // Distance <= 0.50 maps linearly from 100% to 90% (e.g. 0.30 -> 94%).
+          // Distance between 0.50 and 0.70 maps from 90% down to 0% (e.g. 0.55 -> 68%).
+          if (distance <= 0.50) {
+            confidence = Math.round(100 - (distance * 20));
+          } else {
+            confidence = Math.round(Math.max(0, 90 - (distance - 0.50) * 450));
+          }
+
+          // Map UI minConfidence slider (50% to 99%) to actual face distance threshold (0.65 to 0.40)
+          const maxDistance = 0.65 - ((minConfidence - 50) / 100) * 0.5;
+
+          // Reject match as unknown if it exceeds allowed distance threshold
+          if (distance > maxDistance) {
+            label = 'unknown';
+          }
         }
 
         return {

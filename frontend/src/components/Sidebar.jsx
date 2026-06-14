@@ -6,6 +6,7 @@ import {
   LayoutDashboard, 
   ScanFace, 
   UserPlus, 
+  Users,
   ClipboardList, 
   ShieldAlert, 
   LogOut, 
@@ -21,6 +22,7 @@ const Sidebar = () => {
 
   const links = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'teacher'] },
+    { to: '/students', label: 'Registered Students', icon: Users, roles: ['admin', 'teacher'] },
     { to: '/attendance-scan', label: 'Scan Terminal', icon: ScanFace, roles: ['admin', 'teacher'] },
     { to: '/register-student', label: 'Register Student', icon: UserPlus, roles: ['admin'] },
     { to: '/bulk-import', label: 'Bulk Import', icon: FileSpreadsheet, roles: ['admin'] },

@@ -37,8 +37,8 @@ const processIotFrame = async (req, res) => {
       });
     }
 
-    // 2. Fetch all enrolled students from MongoDB (including face descriptors)
-    const enrolledStudents = await Student.find({});
+    // 2. Fetch all enrolled students from memory cache instead of querying database on every request
+    const enrolledStudents = await faceRecognitionService.getCachedEnrolledStudents();
     if (enrolledStudents.length === 0) {
       return res.status(200).json({
         success: true,
@@ -74,7 +74,14 @@ const processIotFrame = async (req, res) => {
 
     // 4. Iterate matches to register attendance or raise security warnings
     for (const match of matches) {
+      // Print detailed recognition metrics to server logs
       if (match.label !== 'unknown' && match.student) {
+        console.log(`🧠 [IoT Recognition Debug] Student Matched: ${match.student.name} (${match.student.usn}) | Similarity Score (Euclidean Distance): ${match.distance.toFixed(4)} | Confidence: ${match.confidence}%`);
+      } else {
+        console.log(`🧠 [IoT Recognition Debug] Match Failed: Face detected but classified as UNKNOWN | Confidence: ${match.confidence}%`);
+      }
+
+      if (match.label !== 'unknown' && match.student && match.distance <= 0.50) {
         // Registered Student Detected
         const studentId = match.student.id;
         

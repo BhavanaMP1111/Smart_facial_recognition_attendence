@@ -233,11 +233,12 @@ const AttendanceRecords = () => {
               className="w-full px-3 py-2 rounded-lg bg-white/40 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-800 dark:text-white outline-none cursor-pointer"
             >
               <option value="">All Departments</option>
-              <option value="CSE">Computer Science</option>
-              <option value="ISE">Information Science</option>
-              <option value="ECE">Electronics & Comm</option>
-              <option value="ME">Mechanical Eng</option>
-              <option value="CV">Civil Eng</option>
+              <option value="CSE">Computer Science (CSE)</option>
+              <option value="ISE">Information Science (ISE)</option>
+              <option value="CSE(AIML)">CSE (AI & ML)</option>
+              <option value="AIDS">AI & Data Science (AIDS)</option>
+              <option value="ECE">Electronics & Comm (ECE)</option>
+              <option value="EEE">Electrical & Electronics (EEE)</option>
             </select>
           </div>
 

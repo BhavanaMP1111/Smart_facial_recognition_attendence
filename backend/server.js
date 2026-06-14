@@ -69,9 +69,12 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
   console.log(`🚀 Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
   
-  // Proactively boot/load the Face API models on backend startup
+  // Proactively boot/load the Face API models on backend startup and preload face descriptor cache
   try {
-    await faceRecognitionService.initializeFaceRecognition();
+    const initialized = await faceRecognitionService.initializeFaceRecognition();
+    if (initialized) {
+      await faceRecognitionService.loadDescriptorCache();
+    }
   } catch (err) {
     console.error('⚠️ Model load failed during server startup. Ensure model downloader is run:', err.message);
   }

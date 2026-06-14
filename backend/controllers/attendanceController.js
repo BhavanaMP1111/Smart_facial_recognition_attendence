@@ -80,6 +80,42 @@ const getAttendanceLogs = async (req, res) => {
       ];
     }
 
+    // Special logic for ABSENT status filter
+    if (status === 'Absent') {
+      const queryDate = date || new Date().toISOString().split('T')[0];
+
+      // 1. Find all students matching query filters
+      const allStudents = await Student.find(studentMatch).select('name usn department semester');
+
+      // 2. Find student ObjectIds that are Present or Late on this date
+      const presentLogs = await Attendance.find({
+        date: queryDate,
+        status: { $in: ['Present', 'Late'] }
+      }).select('student');
+
+      const presentStudentIds = presentLogs.map(log => log.student.toString());
+
+      // 3. Subtract present students from all students
+      const absentStudents = allStudents.filter(s => !presentStudentIds.includes(s._id.toString()));
+
+      // 4. Map them to look like attendance logs
+      const absentLogs = absentStudents.map(student => ({
+        _id: `absent_${student._id}_${queryDate}`,
+        student,
+        date: queryDate,
+        timestamp: new Date(`${queryDate}T00:00:00Z`),
+        status: 'Absent',
+        markedBy: 'none',
+        confidence: 0
+      }));
+
+      return res.json({
+        success: true,
+        count: absentLogs.length,
+        data: absentLogs,
+      });
+    }
+
     let attendanceQuery = {};
     if (date) attendanceQuery.date = date;
     if (status) attendanceQuery.status = status;

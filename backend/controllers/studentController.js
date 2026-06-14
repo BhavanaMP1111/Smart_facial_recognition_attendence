@@ -1,5 +1,10 @@
 const Student = require('../models/Student');
 const Attendance = require('../models/Attendance');
+const canvas = require('canvas');
+const faceRecognitionService = require('../services/faceRecognitionService');
+const faceapi = require('@vladmandic/face-api/dist/face-api.node-wasm.js');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * @desc    Register a new student with face descriptors
@@ -14,6 +19,14 @@ const registerStudent = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Please provide all details: name, usn, department, semester, and faceDescriptors',
+      });
+    }
+
+    const allowedDepts = ['CSE', 'ISE', 'CSE(AIML)', 'AIDS', 'ECE', 'EEE'];
+    if (!allowedDepts.includes(department)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid department. Allowed departments: ${allowedDepts.join(', ')}`
       });
     }
 
@@ -33,7 +46,11 @@ const registerStudent = async (req, res) => {
       department,
       semester,
       faceDescriptors,
+      admissionYear: req.body.admissionYear || new Date().getFullYear(),
     });
+
+    // Invalidate descriptor cache
+    await faceRecognitionService.clearDescriptorCache();
 
     res.status(201).json({
       success: true,
@@ -55,10 +72,10 @@ const getStudents = async (req, res) => {
     const { department, semester, search } = req.query;
     let query = {};
 
-    if (department) {
+    if (department && department !== 'All Departments') {
       query.department = department;
     }
-    if (semester) {
+    if (semester && semester !== 'All Semesters') {
       query.semester = semester;
     }
     if (search) {
@@ -68,12 +85,30 @@ const getStudents = async (req, res) => {
       ];
     }
 
-    // Exclude faceDescriptors in general listing to keep payloads light
-    const students = await Student.find(query).select('-faceDescriptors').sort({ name: 1 });
+    const count = await Student.countDocuments(query);
+    let studentsQuery = Student.find(query).select('-faceDescriptors').sort({ name: 1 });
+
+    let page = 1;
+    let limit = 10;
+    let pages = 1;
+
+    if (req.query.page) {
+      page = parseInt(req.query.page) || 1;
+      limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
+      studentsQuery = studentsQuery.skip(skip).limit(limit);
+      pages = Math.ceil(count / limit);
+    }
+
+    const students = await studentsQuery;
 
     res.json({
       success: true,
       count: students.length,
+      total: count,
+      page,
+      pages,
+      limit,
       data: students,
     });
   } catch (error) {
@@ -123,7 +158,7 @@ const getStudentFaceCache = async (req, res) => {
  */
 const updateStudent = async (req, res) => {
   try {
-    const { name, usn, department, semester, faceDescriptors } = req.body;
+    const { name, usn, department, semester, faceDescriptors, admissionYear } = req.body;
     let student = await Student.findById(req.params.id);
 
     if (!student) {
@@ -143,11 +178,51 @@ const updateStudent = async (req, res) => {
     }
 
     if (name) student.name = name;
-    if (department) student.department = department;
+    if (department) {
+      const allowedDepts = ['CSE', 'ISE', 'CSE(AIML)', 'AIDS', 'ECE', 'EEE'];
+      if (!allowedDepts.includes(department)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid department. Allowed departments: ${allowedDepts.join(', ')}`
+        });
+      }
+      student.department = department;
+    }
     if (semester) student.semester = semester;
-    if (faceDescriptors) student.faceDescriptors = faceDescriptors;
+    if (admissionYear) student.admissionYear = parseInt(admissionYear);
+    if (faceDescriptors) {
+      student.faceDescriptors = typeof faceDescriptors === 'string' ? JSON.parse(faceDescriptors) : faceDescriptors;
+    }
+
+    // Handle uploaded photo file
+    if (req.file) {
+      const descResult = await faceRecognitionService.extractEnrollmentDescriptor(req.file.buffer);
+      if (!descResult.success) {
+        return res.status(400).json({
+          success: false,
+          message: `Quality check failed: ${descResult.reason}`
+        });
+      }
+
+      const uploadsDir = path.join(__dirname, '..', 'uploads');
+      const studentsDir = path.join(uploadsDir, 'students');
+      if (!fs.existsSync(studentsDir)) {
+        fs.mkdirSync(studentsDir, { recursive: true });
+      }
+
+      const finalUsn = student.usn;
+      const destPhotoName = `${finalUsn}.jpg`;
+      const destPhotoPath = path.join(studentsDir, destPhotoName);
+      fs.writeFileSync(destPhotoPath, req.file.buffer);
+
+      student.imageUrl = `/uploads/students/${destPhotoName}`;
+      student.faceDescriptors = [descResult.descriptor];
+    }
 
     await student.save();
+
+    // Invalidate descriptor cache
+    await faceRecognitionService.clearDescriptorCache();
 
     res.json({
       success: true,
@@ -177,9 +252,86 @@ const deleteStudent = async (req, res) => {
     // Delete student
     await student.deleteOne();
 
+    // Invalidate descriptor cache
+    await faceRecognitionService.clearDescriptorCache();
+
     res.json({
       success: true,
       message: 'Student and associated attendance logs deleted successfully',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Get student count and stats
+ * @route   GET /api/students/stats
+ * @access  Private
+ */
+const getStudentStats = async (req, res) => {
+  try {
+    const totalStudents = await Student.countDocuments();
+    
+    // Get unique departments count
+    const depts = await Student.distinct('department');
+    const totalDepartments = depts.length;
+
+    // Get today's attendance metrics
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayLogs = await Attendance.find({ date: todayStr });
+    
+    const presentCount = todayLogs.filter(log => log.status === 'Present' || log.status === 'Late').length;
+    const attendancePercentage = totalStudents > 0
+      ? Math.round((presentCount / totalStudents) * 100)
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalStudents,
+        totalDepartments,
+        todayPresentCount: presentCount,
+        todayAttendanceRate: attendancePercentage
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Bulk promote semesters for all students
+ * @route   POST /api/students/promote
+ * @access  Private (Admin Only)
+ */
+const promoteStudents = async (req, res) => {
+  try {
+    const students = await Student.find({});
+    let promotedCount = 0;
+
+    for (const student of students) {
+      const currentSem = parseInt(student.semester);
+      if (!isNaN(currentSem)) {
+        if (currentSem < 8) {
+          student.semester = (currentSem + 1).toString();
+        } else {
+          student.semester = 'Graduated';
+        }
+        await student.save();
+        promotedCount++;
+      }
+    }
+
+    // Invalidate descriptor cache after all promotions
+    if (promotedCount > 0) {
+      await faceRecognitionService.clearDescriptorCache();
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully promoted ${promotedCount} students.`,
+      data: { promotedCount }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -193,4 +345,6 @@ module.exports = {
   getStudentFaceCache,
   updateStudent,
   deleteStudent,
+  getStudentStats,
+  promoteStudents,
 };

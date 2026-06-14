@@ -13,15 +13,23 @@ const StudentSchema = new mongoose.Schema({
     uppercase: true,
     trim: true,
   },
-  // Supporting both 'department' and 'dept' for seamless compatibility
   department: {
     type: String,
     required: [true, 'Please specify department'],
     trim: true,
+    enum: {
+      values: ['CSE', 'ISE', 'CSE(AIML)', 'AIDS', 'ECE', 'EEE'],
+      message: 'Invalid department: must be CSE, ISE, CSE(AIML), AIDS, ECE, or EEE'
+    }
   },
+  // Supporting both 'department' and 'dept' for seamless compatibility
   dept: {
     type: String,
     trim: true,
+    enum: {
+      values: ['CSE', 'ISE', 'CSE(AIML)', 'AIDS', 'ECE', 'EEE'],
+      message: 'Invalid department: must be CSE, ISE, CSE(AIML), AIDS, ECE, or EEE'
+    }
   },
   semester: {
     type: String,
@@ -56,6 +64,10 @@ const StudentSchema = new mongoose.Schema({
       (val) => val.length > 0,
       'Must contain at least one face descriptor array'
     ]
+  },
+  admissionYear: {
+    type: Number,
+    default: () => new Date().getFullYear(),
   },
   registeredAt: {
     type: Date,

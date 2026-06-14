@@ -11,6 +11,7 @@ import BulkImport from './pages/BulkImport';
 import RealTimeAttendance from './pages/RealTimeAttendance';
 import AttendanceRecords from './pages/AttendanceRecords';
 import UnknownDetections from './pages/UnknownDetections';
+import RegisteredStudents from './pages/RegisteredStudents';
 
 // Components
 import Sidebar from './components/Sidebar';
@@ -48,6 +49,7 @@ const AppLayout = () => {
       <main className="flex-1 overflow-y-auto max-h-screen">
         <Routes>
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/students" element={<RegisteredStudents />} />
           <Route path="/attendance-scan" element={<RealTimeAttendance />} />
           <Route 
             path="/register-student" 

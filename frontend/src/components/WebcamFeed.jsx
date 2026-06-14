@@ -5,7 +5,8 @@ const WebcamFeed = ({
   onFrameProcessed, 
   isActive = true, 
   className = '', 
-  overlayCanvas = true 
+  overlayCanvas = true,
+  deviceId = ''
 }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -35,7 +36,7 @@ const WebcamFeed = ({
         video: {
           width: { ideal: 640 },
           height: { ideal: 480 },
-          facingMode: 'user',
+          ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' })
         },
         audio: false
       };
@@ -73,7 +74,7 @@ const WebcamFeed = ({
     return () => {
       stopCamera();
     };
-  }, [isActive]);
+  }, [isActive, deviceId]);
 
   // Feed frame data back to parent for face detection loops
   useEffect(() => {

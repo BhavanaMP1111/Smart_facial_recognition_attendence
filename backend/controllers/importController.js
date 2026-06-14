@@ -135,6 +135,35 @@ const importStudents = async (req, res) => {
         continue;
       }
 
+      // Validate and normalize department
+      const allowedDepts = ['CSE', 'ISE', 'CSE(AIML)', 'AIDS', 'ECE', 'EEE'];
+      const deptUpper = studentData.dept.trim().toUpperCase().replace(/\s+/g, '');
+      let finalDept = '';
+
+      if (allowedDepts.includes(deptUpper)) {
+        finalDept = deptUpper;
+      } else if (deptUpper.includes('AIML') || deptUpper.includes('AI&ML') || deptUpper.includes('ARTIFICIALINTELLIGENCE&MACHINELEARNING')) {
+        finalDept = 'CSE(AIML)';
+      } else if (deptUpper.includes('AIDS') || deptUpper.includes('AI&DS') || deptUpper.includes('ARTIFICIALINTELLIGENCE&DATASCIENCE')) {
+        finalDept = 'AIDS';
+      } else if (deptUpper.includes('COMPUTERSCIENCE') || deptUpper === 'CS') {
+        finalDept = 'CSE';
+      } else if (deptUpper.includes('INFORMATIONSCIENCE') || deptUpper === 'IS') {
+        finalDept = 'ISE';
+      } else if (deptUpper.includes('ELECTRONICS') || deptUpper === 'EC') {
+        finalDept = 'ECE';
+      } else if (deptUpper.includes('ELECTRICAL') || deptUpper === 'EE') {
+        finalDept = 'EEE';
+      } else {
+        failures.push({
+          row: rowNum,
+          usn: studentData.usn || 'N/A',
+          name: studentData.name || 'N/A',
+          reason: `Invalid department: '${studentData.dept}'. Allowed: CSE, ISE, CSE(AIML), AIDS, ECE, EEE`
+        });
+        continue;
+      }
+
       const usn = studentData.usn.toUpperCase();
 
       // Check Duplicates in DB
@@ -178,31 +207,15 @@ const importStudents = async (req, res) => {
         continue;
       }
 
-      // Load image and detect face
       try {
-        const img = await canvas.loadImage(matchedFile.path);
+        const descResult = await faceRecognitionService.extractEnrollmentDescriptor(fs.readFileSync(matchedFile.path));
 
-        // Run face detector
-        // Tiny face detector works fast, SSD Mobilenet has high accuracy
-        let detection = await faceapi
-          .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
-          .withFaceLandmarks()
-          .withFaceDescriptor();
-
-        // Fallback to SSD Mobilenet V1 if Tiny Detector fails
-        if (!detection) {
-          detection = await faceapi
-            .detectSingleFace(img)
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-        }
-
-        if (!detection) {
+        if (!descResult.success) {
           failures.push({
             row: rowNum,
             usn,
             name: studentData.name,
-            reason: `Face-API failure: No face detected in photo '${matchedFile.name}'`
+            reason: `Quality validation failed: ${descResult.reason}`
           });
           continue;
         }
@@ -213,14 +226,14 @@ const importStudents = async (req, res) => {
         fs.copyFileSync(matchedFile.path, destPhotoPath);
         const imageUrl = `/uploads/students/${destPhotoName}`;
 
-        const descriptorArray = Array.from(detection.descriptor);
+        const descriptorArray = descResult.descriptor;
 
         // Create student profile in database
         const student = await Student.create({
           name: studentData.name,
           usn,
-          department: studentData.dept,
-          dept: studentData.dept,
+          department: finalDept,
+          dept: finalDept,
           semester: studentData.semester,
           section: studentData.section || 'A',
           email: studentData.email || '',
@@ -247,6 +260,11 @@ const importStudents = async (req, res) => {
           reason: `Image processing error: ${err.message}`
         });
       }
+    }
+
+    // Refresh memory cache of descriptors if any students were added
+    if (successes.length > 0) {
+      await faceRecognitionService.clearDescriptorCache();
     }
 
     // Clean up temporary extracted ZIP files

@@ -17,6 +17,8 @@ const api = {
     register: (studentData) => axios.post('/api/students', studentData),
     update: (id, studentData) => axios.put(`/api/students/${id}`, studentData),
     delete: (id) => axios.delete(`/api/students/${id}`),
+    getStats: () => axios.get('/api/students/stats'),
+    promote: () => axios.post('/api/students/promote'),
     bulkImport: (formData, onUploadProgress) => 
       axios.post('/api/students/import', formData, {
         headers: {

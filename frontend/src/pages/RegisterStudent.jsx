@@ -22,6 +22,7 @@ const RegisterStudent = () => {
   const [usn, setUsn] = useState('');
   const [department, setDepartment] = useState('CSE');
   const [semester, setSemester] = useState('6');
+  const [admissionYear, setAdmissionYear] = useState(new Date().getFullYear().toString());
   
   const [capturing, setCapturing] = useState(false);
   const [samples, setSamples] = useState([]); // Stores Float32Array descriptors
@@ -31,6 +32,32 @@ const RegisterStudent = () => {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
   const videoRef = useRef(null);
+
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(localStorage.getItem('selectedDeviceId') || '');
+
+  // Detect and list camera devices
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true });
+        const deviceInfos = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = deviceInfos.filter(device => device.kind === 'videoinput');
+        setDevices(videoDevices);
+        
+        if (videoDevices.length > 0) {
+          const exists = videoDevices.some(d => d.deviceId === selectedDeviceId);
+          if (!selectedDeviceId || !exists) {
+            setSelectedDeviceId(videoDevices[0].deviceId);
+            localStorage.setItem('selectedDeviceId', videoDevices[0].deviceId);
+          }
+        }
+      } catch (err) {
+        console.error('Error listing cameras:', err);
+      }
+    };
+    getDevices();
+  }, [selectedDeviceId]);
 
   // Auto load face-api models when page boots
   useEffect(() => {
@@ -93,7 +120,7 @@ const RegisterStudent = () => {
       }
 
       // 3. Update Progress indicators (We require 3 unique captures)
-      const nextProgress = Math.round(((samples.length + 1) / 3) * 100);
+      const nextProgress = Math.min(100, Math.round(((samples.length + 1) / 3) * 100));
       setProgress(nextProgress);
       setStatusMsg({ type: 'success', text: `✨ Captured sample [${samples.length + 1}/3] successfully!` });
     } catch (err) {
@@ -124,6 +151,7 @@ const RegisterStudent = () => {
         usn,
         department,
         semester,
+        admissionYear: parseInt(admissionYear) || new Date().getFullYear(),
         faceDescriptors: samples
       };
 
@@ -212,7 +240,7 @@ const RegisterStudent = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
                     <School className="w-3.5 h-3.5" />
@@ -221,13 +249,14 @@ const RegisterStudent = () => {
                   <select
                     value={department}
                     onChange={(e) => setDepartment(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 focus:border-cyber-blue dark:focus:border-cyber-blue outline-none text-slate-800 dark:text-white transition-all duration-200 cursor-pointer"
+                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 focus:border-cyber-blue dark:focus:border-cyber-blue outline-none text-slate-800 dark:text-white transition-all duration-200 cursor-pointer text-xs"
                   >
-                    <option value="CSE" className="bg-white dark:bg-cyber-dark">Computer Science</option>
-                    <option value="ISE" className="bg-white dark:bg-cyber-dark">Information Science</option>
-                    <option value="ECE" className="bg-white dark:bg-cyber-dark">Electronics & Comm</option>
-                    <option value="ME" className="bg-white dark:bg-cyber-dark">Mechanical Eng</option>
-                    <option value="CV" className="bg-white dark:bg-cyber-dark">Civil Eng</option>
+                    <option value="CSE" className="bg-white dark:bg-cyber-dark">Computer Science (CSE)</option>
+                    <option value="ISE" className="bg-white dark:bg-cyber-dark">Information Science (ISE)</option>
+                    <option value="CSE(AIML)" className="bg-white dark:bg-cyber-dark">CSE (AI & ML)</option>
+                    <option value="AIDS" className="bg-white dark:bg-cyber-dark">AI & Data Science (AIDS)</option>
+                    <option value="ECE" className="bg-white dark:bg-cyber-dark">Electronics & Comm (ECE)</option>
+                    <option value="EEE" className="bg-white dark:bg-cyber-dark">Electrical & Electronics (EEE)</option>
                   </select>
                 </div>
 
@@ -239,7 +268,7 @@ const RegisterStudent = () => {
                   <select
                     value={semester}
                     onChange={(e) => setSemester(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 focus:border-cyber-blue dark:focus:border-cyber-blue outline-none text-slate-800 dark:text-white transition-all duration-200 cursor-pointer"
+                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 focus:border-cyber-blue dark:focus:border-cyber-blue outline-none text-slate-800 dark:text-white transition-all duration-200 cursor-pointer text-xs"
                   >
                     {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
                       <option key={s} value={s.toString()} className="bg-white dark:bg-cyber-dark">
@@ -247,6 +276,21 @@ const RegisterStudent = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                    <Hash className="w-3.5 h-3.5" />
+                    <span>Admission Year</span>
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="e.g. 2025"
+                    value={admissionYear}
+                    onChange={(e) => setAdmissionYear(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 focus:border-cyber-blue dark:focus:border-cyber-blue outline-none text-slate-800 dark:text-white transition-all duration-200 text-xs"
+                  />
                 </div>
               </div>
             </div>
@@ -303,12 +347,35 @@ const RegisterStudent = () => {
             Biometric Calibration Camera
           </h3>
 
+          {devices.length > 0 && (
+            <div className="flex flex-col space-y-1.5 w-full bg-white/40 dark:bg-slate-900/40 p-4 rounded-2xl border border-slate-200/50 dark:border-slate-800/50">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Select Camera
+              </label>
+              <select
+                value={selectedDeviceId}
+                onChange={(e) => {
+                  setSelectedDeviceId(e.target.value);
+                  localStorage.setItem('selectedDeviceId', e.target.value);
+                }}
+                className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-white text-sm focus:border-cyber-blue outline-none cursor-pointer appearance-none shadow-sm"
+              >
+                {devices.map((device, idx) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Camera ${idx + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Webcam view */}
           <div className="relative">
             <WebcamFeed
               onFrameProcessed={handleFrameCapture}
               isActive={progress < 100}
               overlayCanvas={false}
+              deviceId={selectedDeviceId}
             />
             
             {progress < 100 && (
