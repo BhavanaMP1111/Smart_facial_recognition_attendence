@@ -7,6 +7,9 @@ const path = require('path');
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 
+// In-memory cache to handle 30-second check-in and alert throttles
+const iotCooldowns = new Map();
+
 /**
  * @desc    Process incoming IoT camera image frame for server-side recognition & attendance marking
  * @route   POST /api/iot/attendance
@@ -48,10 +51,10 @@ const processIotFrame = async (req, res) => {
     }
 
     // 3. Perform server-side Face Detection and Vector Matching
-    // Distance threshold: 0.55 (Euclidean distance. Lower means stricter matching)
+    // Distance threshold: 0.48 (Euclidean distance. Lower means stricter matching)
     let recognitionResults;
     try {
-      recognitionResults = await faceRecognitionService.recognizeFacesInImage(imageBuffer, enrolledStudents, 0.55);
+      recognitionResults = await faceRecognitionService.recognizeFacesInImage(imageBuffer, enrolledStudents, 0.48);
     } catch (modelErr) {
       return res.status(500).json({
         success: false,
@@ -71,21 +74,42 @@ const processIotFrame = async (req, res) => {
 
     const processedMatches = [];
     const todayStr = new Date().toISOString().split('T')[0];
+    const now = Date.now();
 
     // 4. Iterate matches to register attendance or raise security warnings
     for (const match of matches) {
-      // Print detailed recognition metrics to server logs
-      if (match.label !== 'unknown' && match.student) {
-        console.log(`🧠 [IoT Recognition Debug] Student Matched: ${match.student.name} (${match.student.usn}) | Similarity Score (Euclidean Distance): ${match.distance.toFixed(4)} | Confidence: ${match.confidence}%`);
-      } else {
-        console.log(`🧠 [IoT Recognition Debug] Match Failed: Face detected but classified as UNKNOWN | Confidence: ${match.confidence}%`);
-      }
-
-      if (match.label !== 'unknown' && match.student && match.distance <= 0.50) {
+      if (match.label === 'move-closer') {
+        console.log(`🧠 [IoT Check-In] Face box too small (Move Closer). Skipping check-in & intruder alert.`);
+        processedMatches.push({
+          status: 'move_closer',
+          confidence: match.confidence
+        });
+      } else if (match.label === 'ambiguous') {
+        console.log(`🧠 [IoT Check-In] Ambiguous match detected. Skipping check-in & intruder alert.`);
+        processedMatches.push({
+          status: 'ambiguous_match',
+          confidence: match.confidence
+        });
+      } else if (match.label !== 'unknown' && match.student) {
         // Registered Student Detected
         const studentId = match.student.id;
         
-        // Prevent duplicate attendance for the same student on the same day
+        // Check 30-second check-in cooldown to prevent duplicate logging
+        const lastCheckTime = iotCooldowns.get(studentId.toString());
+        if (lastCheckTime && now - lastCheckTime < 30000) {
+          console.log(`📡 IoT Check-In: Duplicate check-in ignored (cooldown) for ${match.student.name}`);
+          processedMatches.push({
+            status: 'already_marked',
+            name: match.student.name,
+            usn: match.student.usn,
+            confidence: match.confidence
+          });
+          continue;
+        }
+
+        iotCooldowns.set(studentId.toString(), now);
+
+        // Prevent duplicate attendance for the same student on the same day in DB
         const existingAttendance = await Attendance.findOne({
           student: studentId,
           date: todayStr
@@ -114,7 +138,19 @@ const processIotFrame = async (req, res) => {
           attendance: attendanceRecord
         });
       } else {
-        // Unknown Person Detected! Log snapshot as alert warning
+        // Unknown Person (Stranger) Detected! Log snapshot as alert warning with 30s cooldown
+        const lastUnknownTime = iotCooldowns.get('unknown');
+        if (lastUnknownTime && now - lastUnknownTime < 30000) {
+          console.log(`🚨 IoT Alert: Unknown face detected but throttled (cooldown).`);
+          processedMatches.push({
+            status: 'unknown_alert_throttled',
+            confidence: match.confidence
+          });
+          continue;
+        }
+
+        iotCooldowns.set('unknown', now);
+
         let snapshotUrl = '';
         try {
           const fileName = `iot_unknown_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}.jpg`;

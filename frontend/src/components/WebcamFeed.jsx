@@ -95,7 +95,7 @@ const WebcamFeed = ({
     // Delay start slightly to let metadata load
     const timeoutId = setTimeout(() => {
       animFrameId = requestAnimationFrame(processFrame);
-    }, 1000);
+    }, 50);
 
     return () => {
       cancelAnimationFrame(animFrameId);

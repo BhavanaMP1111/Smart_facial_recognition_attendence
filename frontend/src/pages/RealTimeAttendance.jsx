@@ -51,7 +51,7 @@ const RealTimeAttendance = () => {
   useEffect(() => {
     const getDevices = async () => {
       try {
-        await navigator.mediaDevices.getUserMedia({ video: true });
+        // Enumerate devices directly to speed up initialization
         const deviceInfos = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = deviceInfos.filter(device => device.kind === 'videoinput');
         setDevices(videoDevices);
@@ -154,8 +154,8 @@ const RealTimeAttendance = () => {
   // Performance Throttling Refs
   const lastScanTime = useRef(0);
   const isScanning = useRef(false);
-  // Cooldown interval: 10 seconds before letting browser re-scan (duplicate check is handled on server anyway)
-  const COOLDOWN_MS = 10000;
+  // Cooldown interval: 30 seconds before letting browser re-scan (duplicate check is handled on server anyway)
+  const COOLDOWN_MS = 30000;
 
   // Synthesize Audio Chime (Saves downloading external asset files)
   const playCheckinChime = () => {
@@ -230,9 +230,13 @@ const RealTimeAttendance = () => {
       if (results && results.length > 0) {
         const primaryFace = results[0];
         const isUnknown = primaryFace.label === 'unknown';
+        const isTooFar = primaryFace.label === 'move-closer';
+        const isChecking = primaryFace.label === 'checking-liveness';
+        const isSpoof = primaryFace.label === 'spoof';
+        const isAmbiguous = primaryFace.label === 'ambiguous';
         let matchedName = 'Unknown';
         
-        if (!isUnknown && students.length > 0) {
+        if (!isUnknown && !isTooFar && !isChecking && !isSpoof && !isAmbiguous && students.length > 0) {
           const stud = students.find(s => s._id === primaryFace.label || s.id === primaryFace.label);
           if (stud) matchedName = stud.name;
         }
@@ -240,10 +244,14 @@ const RealTimeAttendance = () => {
         setDiagnostics(prev => ({
           ...prev,
           facesDetected: results.length,
-          confidence: `${primaryFace.confidence}%`,
-          matchScore: primaryFace.distance.toFixed(4),
-          lastRecognizedStudent: isUnknown ? prev.lastRecognizedStudent : matchedName,
-          status: isUnknown ? 'Unknown Face Detected' : 'Face Verified'
+          confidence: (isTooFar || isChecking || isSpoof || isAmbiguous) ? 'N/A' : `${primaryFace.confidence}%`,
+          matchScore: (isTooFar || isChecking || isSpoof || isAmbiguous) ? 'N/A' : primaryFace.distance.toFixed(4),
+          lastRecognizedStudent: (isUnknown || isTooFar || isChecking || isSpoof || isAmbiguous) ? prev.lastRecognizedStudent : matchedName,
+          status: isTooFar ? 'Move Closer' : 
+                  isChecking ? 'Checking Liveness...' :
+                  isSpoof ? 'Spoofing Detected' :
+                  isAmbiguous ? 'Ambiguous Match' :
+                  isUnknown ? 'Unknown Face Detected' : 'Face Verified'
         }));
       } else {
         setDiagnostics(prev => ({
@@ -260,6 +268,41 @@ const RealTimeAttendance = () => {
       for (const res of results) {
         const studentId = res.label;
         const confidence = res.confidence;
+
+        if (studentId === 'move-closer') {
+          // Face detected but is too far away. Skip processing/alerts, just display state
+          continue;
+        }
+
+        if (studentId === 'checking-liveness') {
+          // Liveness verification in progress. Skip check-in / alerts.
+          continue;
+        }
+
+        if (studentId === 'spoof') {
+          // Spoofing attempt detected! Skip check-in / alerts.
+          const lastSpoofTime = checkinCooldowns.current.get('spoof');
+          if (!lastSpoofTime || now - lastSpoofTime > 10000) {
+            checkinCooldowns.current.set('spoof', now);
+            const spoofLog = {
+              id: `spoof_${now}`,
+              type: 'alert',
+              text: '🚨 Spoofing attempt detected! Static photo/screen presentation blocked.',
+              timestamp: new Date().toLocaleTimeString()
+            };
+            setMarkingLogs(prev => [spoofLog, ...prev].slice(0, 15));
+          }
+          continue;
+        }
+
+        if (studentId === 'ambiguous') {
+          // Ambiguous match detected. Skip marking attendance/alerts, just display status
+          setDiagnostics(prev => ({
+            ...prev,
+            status: 'Ambiguous Match (Ignored)'
+          }));
+          continue;
+        }
 
         if (studentId === 'unknown') {
           // Unknown person detected! Take snapshot and alert

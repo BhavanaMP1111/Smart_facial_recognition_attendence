@@ -44,11 +44,13 @@ const initializeFaceRecognition = async () => {
       return false;
     }
 
-    // Load networks
-    await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
-    await faceapi.nets.tinyFaceDetector.loadFromDisk(modelsPath);
-    await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
-    await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
+    // Load networks in parallel for faster startup
+    await Promise.all([
+      faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath),
+      faceapi.nets.tinyFaceDetector.loadFromDisk(modelsPath),
+      faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath),
+      faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath)
+    ]);
 
     modelsLoaded = true;
     console.log('🧠 [Face Service] Neural networks initialized successfully!');
@@ -128,6 +130,16 @@ const getCachedEnrolledStudents = async () => {
   return cachedEnrolledStudents;
 };
 
+const getEuclideanDistance = (arr1, arr2) => {
+  if (arr1.length !== arr2.length) return 1.0;
+  let sum = 0;
+  for (let i = 0; i < arr1.length; i++) {
+    const diff = arr1[i] - arr2[i];
+    sum += diff * diff;
+  }
+  return Math.sqrt(sum);
+};
+
 /**
  * Validates face quality and extracts a single high-quality descriptor array.
  * @param {Buffer} imageBuffer - Raw photo buffer
@@ -159,17 +171,17 @@ const extractEnrollmentDescriptor = async (imageBuffer) => {
   const score = detection.detection.score;
   const { width, height } = detection.detection.box;
 
-  if (score < 0.75) {
+  if (score < 0.80) {
     return {
       success: false,
       reason: `Photo quality too low (Confidence score: ${Math.round(score * 100)}%). Ensure image is sharp and well-lit.`
     };
   }
 
-  if (width < 60 || height < 60) {
+  if (width < 80 || height < 80) {
     return {
       success: false,
-      reason: `Face resolution is too low (${Math.round(width)}x${Math.round(height)}px). Face box must be at least 60x60px.`
+      reason: `Face resolution is too low (${Math.round(width)}x${Math.round(height)}px). Face box must be at least 80x80px.`
     };
   }
 
@@ -183,10 +195,10 @@ const extractEnrollmentDescriptor = async (imageBuffer) => {
  * Detects and matches face descriptors against enrolled students using memory cache.
  * @param {Buffer} imageBuffer - Image payload buffer
  * @param {Array} enrolledStudentsPassed - Optional override list of students
- * @param {number} distanceThreshold - Euclidean distance threshold (stricter <= 0.6)
+ * @param {number} distanceThreshold - Default Euclidean distance threshold (stricter <= 0.48)
  * @returns {Promise<Object>} Matches details
  */
-const recognizeFacesInImage = async (imageBuffer, enrolledStudentsPassed = null, distanceThreshold = 0.55) => {
+const recognizeFacesInImage = async (imageBuffer, enrolledStudentsPassed = null, distanceThreshold = 0.48) => {
   const isReady = await initializeFaceRecognition();
   if (!isReady) {
     throw new Error('Face-API models are not loaded. Download them using npm run download-models.');
@@ -197,7 +209,7 @@ const recognizeFacesInImage = async (imageBuffer, enrolledStudentsPassed = null,
     
     // Detect multiple faces in the frame for multi-student support
     const detections = await faceapi
-      .detectAllFaces(img)
+      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.4 }))
       .withFaceLandmarks()
       .withFaceDescriptors();
 
@@ -205,77 +217,132 @@ const recognizeFacesInImage = async (imageBuffer, enrolledStudentsPassed = null,
       return { count: 0, matches: [] };
     }
 
-    let faceMatcher = cachedFaceMatcher;
-    let currentEnrolled = cachedEnrolledStudents;
-
-    // Build matcher on the fly only if cache is empty or overridden
-    if (!faceMatcher || enrolledStudentsPassed) {
-      const activeStudents = enrolledStudentsPassed || await Student.find({}).select('name usn department semester faceDescriptors');
-      const labeledDescriptors = [];
-      activeStudents.forEach(student => {
-        if (student.faceDescriptors && student.faceDescriptors.length > 0) {
-          const float32Descriptors = student.faceDescriptors.map(desc => new Float32Array(desc));
-          labeledDescriptors.push(
-            new faceapi.LabeledFaceDescriptors(
-              student._id.toString(),
-              float32Descriptors
-            )
-          );
-        }
-      });
-      
-      if (labeledDescriptors.length > 0) {
-        faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, distanceThreshold);
-        currentEnrolled = activeStudents;
-      }
-    }
-
-    if (!faceMatcher) {
-      return {
-        count: detections.length,
-        matches: detections.map(det => ({
-          label: 'unknown',
-          distance: 1.0,
-          box: det.detection.box,
-          descriptor: Array.from(det.descriptor)
-        }))
-      };
-    }
+    const currentEnrolled = enrolledStudentsPassed || await getCachedEnrolledStudents();
 
     const matches = detections.map(det => {
-      const bestMatch = faceMatcher.findBestMatch(det.descriptor);
-      const label = bestMatch.label;
-      const distance = bestMatch.distance;
-      
-      // Realistic confidence rating mapping (distance <= 0.50 maps 100%-90%, 0.50-0.70 maps 90%-0%)
-      let confidence = 0;
-      if (distance <= 0.50) {
-        confidence = Math.round(100 - (distance * 20));
-      } else {
-        confidence = Math.round(Math.max(0, 90 - (distance - 0.50) * 450));
+      const { width, height } = det.detection.box;
+
+      // 1. Check if the face is too far / small (width/height < 60px)
+      if (width < 60 || height < 60) {
+        return {
+          label: 'move-closer',
+          distance: 1.0,
+          confidence: 0,
+          box: det.detection.box,
+          student: null,
+          status: 'move-closer'
+        };
       }
 
-      let studentDetails = null;
-      if (label !== 'unknown') {
-        const found = currentEnrolled.find(s => s._id.toString() === label);
-        if (found) {
-          studentDetails = {
-            id: found._id,
-            name: found.name,
-            usn: found.usn,
-            department: found.department,
-            semester: found.semester
-          };
-        }
+      if (!currentEnrolled || currentEnrolled.length === 0) {
+        return {
+          label: 'unknown',
+          distance: 1.0,
+          confidence: 0,
+          box: det.detection.box,
+          student: null,
+          status: 'unknown'
+        };
       }
+
+      // 2. Perform manual Euclidean distance matching
+      const studentDistances = [];
+      
+      currentEnrolled.forEach(student => {
+        if (student.faceDescriptors && student.faceDescriptors.length > 0) {
+          let minDistance = 1.0;
+          student.faceDescriptors.forEach(desc => {
+            const dist = getEuclideanDistance(det.descriptor, desc);
+            if (dist < minDistance) {
+              minDistance = dist;
+            }
+          });
+          studentDistances.push({
+            student,
+            distance: minDistance
+          });
+        }
+      });
+
+      if (studentDistances.length === 0) {
+        return {
+          label: 'unknown',
+          distance: 1.0,
+          confidence: 0,
+          box: det.detection.box,
+          student: null,
+          status: 'unknown'
+        };
+      }
+
+      // Sort distances ascending
+      studentDistances.sort((a, b) => a.distance - b.distance);
+
+      const bestMatch = studentDistances[0];
+      const secondBestMatch = studentDistances.length > 1 ? studentDistances[1] : null;
+
+      const bestName = bestMatch.student.name;
+      const bestDistance = bestMatch.distance;
+      const secondBestName = secondBestMatch ? secondBestMatch.student.name : 'None';
+      const secondBestDistance = secondBestMatch ? secondBestMatch.distance : 1.0;
+
+      // Print debug logs exactly as requested:
+      console.log(`\n🔍 [Face Matcher Debug]`);
+      console.log(`Best Match:`);
+      console.log(`${bestName}`);
+      console.log(`Distance:`);
+      console.log(`${bestDistance.toFixed(4)}`);
+      if (secondBestMatch) {
+        console.log(`Second Best:`);
+        console.log(`${secondBestName}`);
+        console.log(`Distance:`);
+        console.log(`${secondBestDistance.toFixed(4)}`);
+      }
+      console.log(`-----------------------------------`);
+
+      // 3. Strict match checking
+      const SAFE_DISTANCE_THRESHOLD = distanceThreshold; // Default is 0.48
+      const AMBIGUITY_MARGIN = 0.10;
+
+      if (bestDistance > SAFE_DISTANCE_THRESHOLD) {
+        return {
+          label: 'unknown',
+          distance: bestDistance,
+          confidence: 0,
+          box: det.detection.box,
+          student: null,
+          status: 'unknown'
+        };
+      }
+
+      if (secondBestMatch && (secondBestDistance - bestDistance) < AMBIGUITY_MARGIN) {
+        console.log(`⚠️ Match rejected due to AMBIGUITY (Difference: ${(secondBestDistance - bestDistance).toFixed(4)} < ${AMBIGUITY_MARGIN})`);
+        return {
+          label: 'ambiguous',
+          distance: bestDistance,
+          confidence: 0,
+          box: det.detection.box,
+          student: null,
+          status: 'ambiguous'
+        };
+      }
+
+      // Clear Match!
+      let studentDetails = {
+        id: bestMatch.student._id || bestMatch.student.id,
+        name: bestMatch.student.name,
+        usn: bestMatch.student.usn,
+        department: bestMatch.student.department,
+        semester: bestMatch.student.semester
+      };
 
       return {
-        label,
-        distance,
-        confidence: confidence < 0 ? 0 : confidence,
+        label: studentDetails.id.toString(),
+        distance: bestDistance,
+        confidence: Math.round((1 - bestDistance) * 100),
         box: det.detection.box,
         student: studentDetails,
-        descriptor: Array.from(det.descriptor)
+        status: 'matched'
       };
     });
 
